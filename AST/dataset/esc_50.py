@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Created on Sat Nov 19 15:12:02 2022
-
-@author: umbertocappellazzo
-"""
 
 import os
 import librosa
@@ -34,6 +29,7 @@ class ESC_50(Dataset):
             apply_SpecAug=False,
             few_shot=False,
             samples_per_class=1,
+            cache_dir=''
     ):
         if split not in ("train", "valid", "test"):
             raise ValueError(f"`train` arg ({split}) must be a bool or train/valid/test.")
@@ -62,13 +58,12 @@ class ESC_50(Dataset):
             freqm = torchaudio.transforms.FrequencyMasking(self.freq_mask)
             timem = torchaudio.transforms.TimeMasking(self.time_mask)
 
-            # self.x[index] is a torch.Tensor of shape [T, F]
-            fbank = torch.transpose(self.x[index], 0, 1)  # [F, T]
-            fbank = fbank.unsqueeze(0)  # [1, F, T]
+            fbank = torch.transpose(self.x[index], 0, 1)
+            fbank = fbank.unsqueeze(0)
             fbank = freqm(fbank)
             fbank = timem(fbank)
-            fbank = fbank.squeeze(0)  # [F, T]
-            fbank = torch.transpose(fbank, 0, 1)  # back to [T, F]
+            fbank = fbank.squeeze(0)
+            fbank = torch.transpose(fbank, 0, 1)
             return fbank, self.y[index]
         else:
             return self.x[index], self.y[index]
@@ -78,7 +73,6 @@ class ESC_50(Dataset):
         Pick the first `samples_per_class` items per class from the (x, y) tensors.
         """
         x_few, y_few = [], []
-        # torch.unique keeps classes sorted by default
         total_classes = torch.unique(self.y).tolist()
 
         for c in total_classes:
@@ -100,12 +94,10 @@ class ESC_50(Dataset):
         else:
             fold = self.test_fold_nums
 
-        # Offline-friendly extractor; ensure fixed-length outputs
         processor = AutoFeatureExtractor.from_pretrained(
             "MIT/ast-finetuned-audioset-10-10-0.4593",
             max_length=self.max_len_AST,
-            cache_dir="/scratch/salmanhu",
-            local_files_only=True,  # important for offline runs
+            cache_dir=cache_dir
         )
 
         feats, labels = [], []
@@ -116,28 +108,25 @@ class ESC_50(Dataset):
         for line in lines:
             items = line.rstrip("\n").split(',')
             if int(items[1]) not in fold:
-                continue  # Not in the requested split/folds
+                continue
 
-            # Read the wav audio, resample to 16kHz, and extract features
             pathh = os.path.join(self.data_path, 'ESC-50/audio', items[0])
             wav, sampling_rate = soundfile.read(pathh)
             wav = librosa.resample(wav, orig_sr=sampling_rate, target_sr=16000)
 
-            # Processor returns tensors; enforce padding/truncation to max_length
             feat = processor(
                 wav,
                 sampling_rate=16000,
                 return_tensors="pt",
                 padding="max_length",
                 truncation=True,
-            )["input_values"].squeeze(0)  # shape [T, F] for AST extractor
+            )["input_values"].squeeze(0)
             feats.append(feat)
 
             labels.append(self.class_ids[items[3]])
 
-        # Stack into torch tensors
-        x = torch.stack(feats, dim=0)  # [N, T, F]
-        y = torch.tensor(labels, dtype=torch.long)  # [N]
+        x = torch.stack(feats, dim=0)
+        y = torch.tensor(labels, dtype=torch.long)
         return x, y
 
     @property

@@ -144,44 +144,13 @@ class Conformer_adapter(nn.Module):
         return out
 
 
-class MambaAdapter(nn.Module):
-    def __init__(self, in_dim, reduction_rate, kernel_size, mamba_config) -> None:
-        super().__init__()
-        bottleneck_dim = round(in_dim / reduction_rate)
-
-        self.norm_act = nn.Sequential(nn.LayerNorm(bottleneck_dim))
-
-        self.down_proj = nn.Linear(in_dim, bottleneck_dim)
-
-        self.mamba = Mamba(
-            d_model=bottleneck_dim,
-            d_state=mamba_config["d_state"],
-            d_conv=mamba_config["d_conv"],
-            expand=mamba_config["expand"],
-        ).to("cuda")
-
-        self.up_proj = nn.Linear(bottleneck_dim, in_dim)
-
-    def forward(self, x):
-        x = self.down_proj(x)
-        x = self.mamba(x)
-        x = self.norm_act(x)
-        x = self.up_proj(x)
-        return x
-
-
-# NS stands for not shared
 class MambAdapter_NS(nn.Module):
     def __init__(self, in_dim, reduction_rate, kernel_size, mamba_config) -> None:
         super().__init__()
-        bottleneck_dim = round(in_dim / reduction_rate)
-
-        # self.norm_act = nn.Sequential(nn.LayerNorm(bottleneck_dim))
+        bottleneck_dim = max(1, round(in_dim / reduction_rate))
 
         self.down_proj = nn.Linear(in_dim, bottleneck_dim)
 
-        global causal_conv1d_fn
-        causal_conv1d_fn = None  # This disables causal_conv1d
 
         self.mamba = Mamba(
             d_model=bottleneck_dim,
@@ -192,34 +161,85 @@ class MambAdapter_NS(nn.Module):
 
         self.up_proj = nn.Linear(bottleneck_dim, in_dim)
 
+        self.dropout = nn.Dropout(p=0.1)
+
+        self._init_weights()
+
+    def _init_weights(self):
+        nn.init.normal_(self.down_proj.weight, mean=0.0, std=0.01)
+        nn.init.zeros_(self.up_proj.weight)
+        nn.init.normal_(self.down_proj.bias, mean=0.0, std=0.01)
+        nn.init.zeros_(self.up_proj.bias)
+
+        for name, param in self.mamba.named_parameters():
+            if 'conv1d' in name and 'bias' in name:
+                nn.init.zeros_(param)
+                with torch.no_grad():
+                    param.clamp_(-1.0, 1.0)
+            elif 'weight' in name:
+                if param.dim() >= 2:
+                    nn.init.xavier_uniform_(param, gain=0.02)
+                else:
+                    nn.init.uniform_(param, -0.02, 0.02)
+
     def forward(self, x):
         x = self.down_proj(x)
         x = self.mamba(x)
-        # x = self.norm_act(x)
+        x = self.dropout(x)
         x = self.up_proj(x)
         return x
 
 
-class MambAdapter(MambAdapter_NS):
+class MambAdapter(nn.Module):
     down_proj = None
     up_proj = None
 
     def __init__(self, in_dim, reduction_rate, kernel_size, mamba_config) -> None:
-        super().__init__(in_dim, reduction_rate, kernel_size, mamba_config)
+        super().__init__()
+        bottleneck_dim = max(1, round(in_dim / reduction_rate))
 
         if MambAdapter.down_proj is None:
-            bottleneck_dim = round(in_dim / reduction_rate)
-
             MambAdapter.down_proj = nn.Linear(in_dim, bottleneck_dim)
             MambAdapter.up_proj = nn.Linear(bottleneck_dim, in_dim)
+
+            nn.init.normal_(MambAdapter.down_proj.weight, mean=0.0, std=0.01)
+            nn.init.zeros_(MambAdapter.up_proj.weight)
+            nn.init.normal_(MambAdapter.down_proj.bias, mean=0.0, std=0.01)
+            nn.init.zeros_(MambAdapter.up_proj.bias)
 
         self.down_proj = MambAdapter.down_proj
         self.up_proj = MambAdapter.up_proj
 
-        self.scaling = nn.Parameter(torch.ones(1))
+        self.dropout = nn.Dropout(p=0.1)
+
+        self.mamba = Mamba(
+            d_model=bottleneck_dim,
+            d_state=mamba_config["d_state"],
+            d_conv=mamba_config["d_conv"],
+            expand=mamba_config["expand"],
+        )
+
+        self._init_mamba_weights()
+
+        self.scaling = nn.Parameter(torch.tensor(0.1))
+
+    def _init_mamba_weights(self):
+        for name, param in self.mamba.named_parameters():
+            if 'conv1d' in name and 'bias' in name:
+                nn.init.zeros_(param)
+                with torch.no_grad():
+                    param.clamp_(-1.0, 1.0)
+            elif 'weight' in name:
+                if param.dim() >= 2:
+                    nn.init.xavier_uniform_(param, gain=0.02)
+                else:
+                    nn.init.uniform_(param, -0.02, 0.02)
 
     def forward(self, x):
-        x = super().forward(x)
+        x = self.down_proj(x)
+        x = self.mamba(x)
+        x = self.dropout(x)
+        x = self.up_proj(x)
         return x * self.scaling
 
 # These are the classes for adapter-tuning. They have been used for the main experiments involving Pfeiffer/Houlsby Bottleneck/Conformer FFN configurations.

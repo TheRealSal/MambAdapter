@@ -1,0 +1,146 @@
+# ############################################################################
+# Model: Whisper (encoder-decoder) + cross-entropy loss
+# Authors: Luca Della Libera 2023
+# ############################################################################
+
+experiment_name: EO_MambAdapter
+locale_name: "eo"
+adapter_type: "MambAdapter"
+
+location: ""
+seed: 0
+__set_seed: !apply:torch.manual_seed [!ref <seed>]
+
+skip_test: False
+
+scratch_folder: !PLACEHOLDER
+
+# Data preparation
+base_locales: [en]
+new_locales: [eo]
+data_folder: !PLACEHOLDER
+max_durations: [36000, 3600, 3600]  # Maximum total durations in seconds for train, dev, and test splits for each locale
+
+# Output directories
+output_folder: !ref results/<whisper_variant>/<experiment_name>/<location>/<projection_size>/<seed>
+save_folder: !ref <output_folder>/save
+
+# Training parameters
+train_batch_size: 6
+valid_batch_size: 16
+train_num_workers: 6
+valid_num_workers: 6
+
+sample_rate: 16000
+sorting: ascending
+avoid_if_longer_than: 10  # Remove utterances longer than 10s (open microphones)
+
+ignore_index: -100  # For cross-entropy loss
+label_smoothing: 0
+
+num_epochs: 15
+lr: 0.001
+final_value: 0.00002
+
+betas: [0.9,0.98]
+eps: 1e-6
+weight_decay: 0.1
+
+whisper_variant: whisper-small
+encoder_only: False
+freeze: False
+freeze_encoder: False
+freeze_decoder: True
+
+max_target_length: 448  # Must be <= 448 (Whisper maximum target length)
+nonfinite_patience: 10
+max_grad_norm: 1.0
+precision: bf16
+gradient_checkpointing: False
+ckpt_interval_minutes: 600
+
+max_gen_tokens: 80
+forced_decoder_locale: null  # Set dynamically
+normalize_transcripts: True
+
+# Adapter options
+projection_size: 24
+adapter_rank_tag: !ref "r=<projection_size>"
+d_state: 16
+expand: 2
+kernel_size: 8
+alpha_init: 0.1
+
+# Dataloader options
+train_dataloader_kwargs:
+    batch_size: !ref <train_batch_size>
+    num_workers: !ref <train_num_workers>
+
+valid_dataloader_kwargs:
+    batch_size: !ref <valid_batch_size>
+    num_workers: !ref <valid_num_workers>
+
+adapter_config:
+  adapter_class: "speechbrain.nnet.adapters.MambAdapter"
+  target_layers:
+    - "model.encoder.layers.*.mlp"
+  adapter_kwargs:
+    projection_size: !ref <projection_size>
+    learn_alpha: True
+    zero_init: True
+    kernel_size: !ref <kernel_size>
+    d_state: !ref <d_state>
+    expand: !ref <expand>
+    alpha_init: !ref <alpha_init>
+
+# Modules
+whisper: !new:model.ProgressiveWhisper
+    source: !ref openai/<whisper_variant>
+    save_path: !ref <save_folder>/checkpoint
+    sampling_rate: !ref <sample_rate>
+    encoder_only: !ref <encoder_only>
+    freeze: !ref <freeze>
+    freeze_encoder: !ref <freeze_encoder>
+    freeze_decoder: !ref <freeze_decoder>
+
+ce_loss: !new:torch.nn.CrossEntropyLoss
+    ignore_index: !ref <ignore_index>
+    label_smoothing: !ref <label_smoothing>
+
+modules:
+    whisper: !ref <whisper>
+
+# Optimizers
+opt_class: !name:torch.optim.AdamW
+    lr: !ref <lr>
+    eps: 1.0e-6
+    betas: [0.9, 0.98]
+    weight_decay: 0.01  # optional; helps generalization
+
+lr_annealing: !new:speechbrain.nnet.schedulers.LinearScheduler
+    initial_value: !ref <lr>
+    final_value: !ref <final_value>
+    epoch_count: !ref <num_epochs>
+
+# Performance metrics
+wer_computer: !name:speechbrain.utils.metric_stats.ErrorRateStats
+
+cer_computer: !name:speechbrain.utils.metric_stats.ErrorRateStats
+    split_tokens: True
+
+# Counters, checkpointers, loggers, etc.
+epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
+    limit: !ref <num_epochs>
+
+checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <save_folder>
+    recoverables:
+        model: !ref <whisper>
+        counter: !ref <epoch_counter>
+
+train_logger: !new:speechbrain.utils.train_logger.WandBLogger
+    initializer: !name:wandb.init
+      entity: ""
+      project: ""
+      name: !ref <experiment_name>
+      tags: [!ref <locale_name>, !ref <adapter_type>, !ref <adapter_rank_tag>, !ref <location>]

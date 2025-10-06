@@ -1,0 +1,8 @@
+numpy
+torch
+torchaudio
+torchvision
+wandb
+transformers
+librosa
+mamba_ssm

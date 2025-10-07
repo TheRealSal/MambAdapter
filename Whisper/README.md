@@ -21,7 +21,7 @@ Point the recipe to your dataset root using the `--data_folder` CLI override or 
 
 ### ⚡ Dataset [download](https://zenodo.org/record/8065754)
 
-The dataset used for the CL-MASR benchmark is extracted from [Common Voice 13](https://commonvoice.mozilla.org/en/datasets) (see [reference paper](https://arxiv.org/abs/1912.06670)). Each of the 20 languages in the dataset includes approximately 10 hours of training material, with an additional 1 hour designated for validation and another 1 hour for testing purposes.
+Our training recipes are adapted from the CL-MASR benchmark is extracted from [Common Voice 13](https://commonvoice.mozilla.org/en/datasets) (see [reference paper](https://arxiv.org/abs/1912.06670)). Each of the 20 languages in the dataset includes approximately 10 hours of training material, with an additional 1 hour designated for validation and another 1 hour for testing purposes.
 
 Download the dataset from [here](https://zenodo.org/record/8065754) and extract it to a data folder of your choice (`CL-MASR` by default).
 
